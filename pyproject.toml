@@ -1,13 +1,28 @@
 [project]
 name = "transfertools"
 version = "0.1.0"
-description = "Add your description here"
+description = "分块写入式安全文件复制工具：先创建目标文件再分块写入，避开直接复制 API 被安全软件拦截"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = []
+
+[project.scripts]
+safecopy = "transfertools.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/transfertools"]
 
 [tool.uv]
 # 缓存放在项目内，避免写入 ~/.cache/uv（在 workspace-write 沙箱下为只读）。
 # 注意：相对路径按「当前工作目录」解析，请在项目根目录执行 uv 命令，
 # 否则会在子目录下另建一份 .uv-cache。
 cache-dir = ".uv-cache"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

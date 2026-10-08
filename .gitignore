@@ -14,3 +14,6 @@ wheels/
 
 # LLM Skills
 .agents/
+
+# AgentTeams runtime artifacts
+.agent-teams/
