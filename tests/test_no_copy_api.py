@@ -14,7 +14,8 @@ import pytest
 import transfertools
 
 PACKAGE_DIR = Path(transfertools.__file__).parent
-SOURCE_FILES = sorted(PACKAGE_DIR.glob("*.py"))
+# 覆盖顶层模块与 GUI 子包（GUI 复用同一复制引擎，同样不得引入直接复制 API）。
+SOURCE_FILES = sorted(PACKAGE_DIR.glob("*.py")) + sorted((PACKAGE_DIR / "gui").glob("*.py"))
 
 #: 被禁用的复制 API（模块名 / os 属性名）。
 FORBIDDEN_MODULES = {"shutil"}

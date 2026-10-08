@@ -8,6 +8,13 @@ dependencies = []
 
 [project.scripts]
 safecopy = "transfertools.cli:main"
+safecopy-gui = "transfertools.gui.main:main"
+
+[project.optional-dependencies]
+# GUI 额外依赖（design D-g1）：未安装时 safecopy CLI 与 transfertools 包照常工作。
+gui = [
+    "pyside6>=6.6",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -23,6 +30,11 @@ packages = ["src/transfertools"]
 cache-dir = ".uv-cache"
 
 [dependency-groups]
+# dev 组同时包含 PySide6：本地/CI 测试要跑 GUI（offscreen）套件；
+# 它不属于 CLI 运行时依赖，运行期依赖仍为空（dependencies = []）。
 dev = [
+    "pyinstaller>=6.0",
+    "pyside6>=6.6",
     "pytest>=9.1.1",
+    "pyyaml>=6.0",
 ]

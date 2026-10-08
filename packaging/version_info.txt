@@ -1,0 +1,35 @@
+# PyInstaller Windows 版本资源（design D-g4：exe 内嵌版本信息）。
+# 语法为 PyInstaller 的 version-file 格式；仅在 Windows 上生效，其它平台会被忽略。
+# 修改版本号时同步更新 pyproject.toml / transfertools.__version__（tests/test_packaging_config.py 会校验一致性）。
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(0, 1, 0, 0),
+    prodvers=(0, 1, 0, 0),
+    mask=0x3F,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0),
+  ),
+  kids=[
+    StringFileInfo(
+      [
+        StringTable(
+          "080404B0",
+          [
+            StringStruct("CompanyName", "transfertools"),
+            StringStruct("FileDescription", "safecopy 图形界面（分块写入式安全文件复制）"),
+            StringStruct("FileVersion", "0.1.0"),
+            StringStruct("InternalName", "safecopy-gui"),
+            StringStruct("LegalCopyright", "PySide6/Qt 以 LGPL v3 授权；详见 README 的许可说明"),
+            StringStruct("OriginalFilename", "safecopy-gui.exe"),
+            StringStruct("ProductName", "safecopy-gui"),
+            StringStruct("ProductVersion", "0.1.0"),
+          ],
+        )
+      ]
+    ),
+    VarFileInfo([VarStruct("Translation", [2052, 1200])]),
+  ],
+)

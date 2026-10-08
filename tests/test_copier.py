@@ -559,9 +559,16 @@ def test_fsync_happens_before_verification(
         order.append("fsync")
         real_fsync(fd)
 
-    def spying_verify(src_path: Path, dst_path: Path, chunk_size: int = copier.DEFAULT_CHUNK_SIZE):
+    def spying_verify(
+        src_path: Path,
+        dst_path: Path,
+        chunk_size: int = copier.DEFAULT_CHUNK_SIZE,
+        **kwargs: object,
+    ) -> tuple[str, str]:
+        # D-g3：verify_digests 新增可选 cancel_event 关键字参数，这里原样透传，
+        # 断言点（fsync 先于 verify）保持不变。
         order.append("verify")
-        return real_verify(src_path, dst_path, chunk_size)
+        return real_verify(src_path, dst_path, chunk_size, **kwargs)
 
     monkeypatch.setattr(os, "fsync", spying_fsync)
     monkeypatch.setattr(copier, "verify_digests", spying_verify)

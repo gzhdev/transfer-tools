@@ -10,6 +10,11 @@
 流程：创建/截断目标文件 → （可选）预分配 → 分块顺序写入 → flush + fsync →
 双端 SHA-256 比对 → 保留权限/时间戳；任一环节失败都会尽力删除目标上的半成品，
 不留未校验的残文件。
+
+GUI 复用钩子（design.md D-g3，全部为可选关键字参数，默认值下行为与既有 CLI 路径
+完全一致）：``copy_file(..., on_bytes=..., cancel_event=...)`` 提供字节级进度回调与
+协作式取消；``cancel_event`` 置位后在块边界抛出 :class:`CopyCancelledError`，
+走上面同一条半成品清理路径。
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import os
 import stat as stat_module
+import threading
 import warnings
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -37,6 +43,7 @@ __all__ = [
     "DestinationError",
     "SameFileError",
     "VerificationError",
+    "CopyCancelledError",
     "CopyResult",
     "validate_chunk_size",
     "iter_chunks",
@@ -69,6 +76,8 @@ STAGE_DONE = "done"
 WarnFn = Callable[[str], None]
 #: 进度回调，参数为 STAGE_* 常量之一。
 ProgressFn = Callable[[str], None]
+#: 字节进度回调（design D-g3）：参数为 ``(已写入字节数, 该文件总字节数)``。
+BytesProgressFn = Callable[[int, int], None]
 
 
 class SafeCopyError(Exception):
@@ -95,6 +104,13 @@ class VerificationError(SafeCopyError):
     """SHA-256 双端比对不一致（design D3、D4 专用异常）。"""
 
 
+class CopyCancelledError(SafeCopyError):
+    """协作式取消被触发（design D-g3）：GUI 置位 ``cancel_event`` 后于块边界抛出。
+
+    与其它 :class:`SafeCopyError` 一样，目标半成品会走既有清理路径删除。
+    """
+
+
 @dataclass(frozen=True)
 class CopyResult:
     """一次成功复制的元信息。"""
@@ -113,6 +129,20 @@ class CopyResult:
 
 def _default_warn(message: str) -> None:
     warnings.warn(message, RuntimeWarning, stacklevel=3)
+
+
+def _check_cancelled(
+    cancel_event: threading.Event | None, path: str | os.PathLike[str]
+) -> None:
+    """协作式取消检查点（design D-g3）。
+
+    仅在 ``cancel_event`` 已置位时抛出 :class:`CopyCancelledError`；传 ``None``
+    （CLI 与既有调用点）时不做任何事，行为与变更前逐字节一致。
+    """
+    if cancel_event is not None and cancel_event.is_set():
+        raise CopyCancelledError(
+            f"复制已取消: {path}（目标上的半成品将被删除）"
+        )
 
 
 def validate_chunk_size(chunk_size: int) -> int:
@@ -144,11 +174,21 @@ def iter_chunks(stream: IO[bytes], chunk_size: int) -> Iterator[bytes]:
         yield chunk
 
 
-def sha256_file(path: str | os.PathLike[str], chunk_size: int = DEFAULT_CHUNK_SIZE) -> str:
-    """分块计算 `path` 的 SHA-256 十六进制摘要。"""
+def sha256_file(
+    path: str | os.PathLike[str],
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    *,
+    cancel_event: threading.Event | None = None,
+) -> str:
+    """分块计算 `path` 的 SHA-256 十六进制摘要。
+
+    :param cancel_event: 可选协作式取消事件（design D-g3）；置位时在块边界抛出
+        :class:`CopyCancelledError`。传 ``None`` 时行为与变更前一致。
+    """
     digest = hashlib.sha256()
     with open(path, "rb") as stream:
         for chunk in iter_chunks(stream, chunk_size):
+            _check_cancelled(cancel_event, path)
             digest.update(chunk)
     return digest.hexdigest()
 
@@ -157,13 +197,19 @@ def verify_digests(
     src: str | os.PathLike[str],
     dst: str | os.PathLike[str],
     chunk_size: int = DEFAULT_CHUNK_SIZE,
+    *,
+    cancel_event: threading.Event | None = None,
 ) -> tuple[str, str]:
     """分别重新打开源与目标文件计算摘要，返回 ``(src_digest, dst_digest)``。
 
     design D3：在 fsync 之后重新读回双方内容计算，而不是写入时顺带累计，
     避免源文件在写入期间被第三方修改导致的误判。
+
+    :param cancel_event: 可选协作式取消事件（design D-g3），校验读回期间按块检查。
     """
-    return sha256_file(src, chunk_size), sha256_file(dst, chunk_size)
+    src_digest = sha256_file(src, chunk_size, cancel_event=cancel_event)
+    dst_digest = sha256_file(dst, chunk_size, cancel_event=cancel_event)
+    return src_digest, dst_digest
 
 
 def resolve_destination(src: Path, dst: Path) -> Path:
@@ -215,6 +261,8 @@ def copy_file(
     preserve_metadata: bool = True,
     warn: WarnFn | None = None,
     progress: ProgressFn | None = None,
+    on_bytes: BytesProgressFn | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> CopyResult:
     """以「创建 + 分块写入 + fsync + SHA-256 校验」方式把 `src` 复制到 `dst`。
 
@@ -225,10 +273,16 @@ def copy_file(
     :param warn: 警告回调，默认走 :func:`warnings.warn`；CLI 会传入 stderr 打印器。
     :param progress: 进度回调，收到 :data:`STAGE_WRITE` / :data:`STAGE_VERIFY` /
         :data:`STAGE_DONE`。
+    :param on_bytes: 可选字节进度回调（design D-g3，GUI 使用）：每写完一块调用一次，
+        参数为 ``(已写入字节数, 源文件总字节数)``。默认 ``None``，此时不做任何额外工作。
+    :param cancel_event: 可选协作式取消事件（design D-g3，GUI 使用）：写入循环与校验
+        读回循环每次迭代检查，置位时抛出 :class:`CopyCancelledError`，目标半成品随后由
+        下面既有的清理路径删除。默认 ``None``（CLI 与既有调用点）时行为完全不变。
     :raises SourceError: 源不存在、是目录或不是普通文件。
     :raises DestinationError: 目标路径本身是目录。
     :raises SameFileError: 源与目标指向同一个文件（同源防护，见 :func:`is_same_file`）；
         该检查在任何写入之前完成，源文件保持零改动。
+    :raises CopyCancelledError: 协作式取消被触发（``cancel_event`` 置位）。
     :raises VerificationError: 双端摘要不一致（目标半成品已被删除）。
     :raises OSError: 写入 / fsync 失败（目标半成品已被尽力删除）。
     """
@@ -272,8 +326,15 @@ def copy_file(
                 preallocated = _try_preallocate(dst_stream, src_stat.st_size, warn)
             with open(src_path, "rb") as src_stream:
                 for chunk in iter_chunks(src_stream, chunk_size):
+                    # D-g3：块边界检查取消；置位即抛 CopyCancelledError，
+                    # 由下面的 except BaseException 删除半成品。
+                    _check_cancelled(cancel_event, src_path)
                     dst_stream.write(chunk)
                     written += len(chunk)
+                    if on_bytes is not None:
+                        on_bytes(written, src_stat.st_size)
+            # 写入阶段结束、fsync 前再检查一次，避免大文件 fsync 期间取消无反馈。
+            _check_cancelled(cancel_event, src_path)
             dst_stream.flush()
             os.fsync(dst_stream.fileno())
         finally:
@@ -281,7 +342,9 @@ def copy_file(
 
         # D3：fsync 之后重新打开双方文件计算 SHA-256 并比对。
         progress(STAGE_VERIFY)
-        src_digest, dst_digest = verify_digests(src_path, dst_path, chunk_size)
+        src_digest, dst_digest = verify_digests(
+            src_path, dst_path, chunk_size, cancel_event=cancel_event
+        )
         if src_digest != dst_digest:
             raise VerificationError(
                 f"完整性校验失败: {src_path} 与 {dst_path} 的 SHA-256 不一致"

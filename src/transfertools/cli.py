@@ -14,8 +14,9 @@ import os
 import sys
 from pathlib import Path
 
-from . import copier
+from . import copier, preflight
 from .copier import SafeCopyError
+from .preflight import UsageError
 
 __all__ = ["EXIT_OK", "EXIT_USAGE", "EXIT_FAILURE", "PROG", "build_parser", "main"]
 
@@ -47,8 +48,8 @@ _EPILOG = """\
 """
 
 
-class _UsageError(Exception):
-    """用法错误：由 :meth:`_ArgumentParser.error` 统一转成退出码 1。"""
+#: 向后兼容的历史名称（实现已抽到 :mod:`transfertools.preflight`，GUI 复用同一套规则）。
+_UsageError = UsageError
 
 
 class _ArgumentParser(argparse.ArgumentParser):
@@ -129,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         _preflight(srcs, dst, recursive=args.recursive)
-    except _UsageError as exc:
+    except UsageError as exc:
         parser.error(str(exc))  # 不会返回：内部 sys.exit(EXIT_USAGE)
 
     if args.recursive:
@@ -138,36 +139,28 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _preflight(srcs: list[Path], dst: Path, *, recursive: bool) -> None:
-    """复制前的用法校验：所有问题都在动手前一次性报出（不产生任何目标文件）。"""
+    """复制前的用法校验：所有问题都在动手前一次性报出（不产生任何目标文件）。
+
+    具体规则与消息文案来自 :mod:`transfertools.preflight`，GUI 复用同一套实现以
+    保证两侧语义一致（design D-g3）。
+    """
     if recursive:
         if len(srcs) != 1:
-            raise _UsageError("--recursive 只接受一个源目录")
+            raise UsageError("--recursive 只接受一个源目录")
         src = srcs[0]
-        if not src.exists():
-            raise _UsageError(f"源路径不存在: {src}")
+        preflight.check_sources_exist(srcs)
         if not src.is_dir():
-            raise _UsageError(f"--recursive 要求源是目录: {src}")
+            raise UsageError(f"--recursive 要求源是目录: {src}")
         if dst.exists() and not dst.is_dir():
-            raise _UsageError(f"--recursive 要求目标是目录（或尚不存在的路径）: {dst}")
+            raise UsageError(f"--recursive 要求目标是目录（或尚不存在的路径）: {dst}")
         # 同源防护（递归场景）：目标目录等于源目录、或落在源目录内部时，复制会把刚写出的
         # 文件再当作源继续遍历并覆盖源数据本身，因此在动手前直接拒绝。
-        if copier.is_within(dst, src):
-            raise _UsageError(
-                "目标目录与源目录相同或位于源目录内部（会自我复制并覆盖源数据），"
-                f"已拒绝: {src} -> {dst}"
-            )
+        preflight.check_self_copy(src, dst)
         return
 
-    missing = [str(item) for item in srcs if not item.exists()]
-    if missing:
-        raise _UsageError("源路径不存在: " + ", ".join(missing))
-    directories = [str(item) for item in srcs if item.is_dir()]
-    if directories:
-        raise _UsageError(
-            "源是目录，请加 -r/--recursive 显式启用递归复制: " + ", ".join(directories)
-        )
-    if len(srcs) > 1 and not dst.is_dir():
-        raise _UsageError(f"多源复制要求最后一个是已存在的目录: {dst}")
+    preflight.check_sources_exist(srcs)
+    preflight.check_directories_need_recursive(srcs)
+    preflight.check_multi_source_destination(srcs, dst)
 
 
 def _make_progress(src: Path, target: Path) -> copier.ProgressFn:
