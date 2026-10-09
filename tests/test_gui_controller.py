@@ -196,7 +196,9 @@ def test_build_plan_expands_directory_and_counts_bytes(
     assert plan.total_files == 4
     assert plan.bytes_known is True
     assert plan.total_bytes == 10 + 5 + 7 + 3
-    assert [(t.src.name, str(t.dst.relative_to(destination))) for t in plan.tasks] == [
+    assert [  # dst 相对路径逐分量比对，避免平台间路径分隔符差异（POSIX `/` vs Windows `\\`）
+        (t.src.name, "/".join(t.dst.relative_to(destination).parts)) for t in plan.tasks
+    ] == [
         ("a.txt", "a.txt"),
         ("b.txt", "b.txt"),
         ("c.txt", "sub/c.txt"),

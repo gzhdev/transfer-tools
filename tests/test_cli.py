@@ -237,6 +237,10 @@ def test_partial_failure_returns_exit_2(
 
 
 @pytest.mark.skipif(IS_ROOT, reason="root 不受文件权限限制")
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows 权限基于 ACL，chmod 0o000 不能阻止读取，本用例语义仅适用于 POSIX 平台",
+)
 def test_unreadable_source_returns_exit_2(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

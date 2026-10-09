@@ -7,6 +7,7 @@ import io
 import os
 import random
 import stat
+import sys
 import warnings
 from pathlib import Path
 
@@ -460,7 +461,9 @@ def test_metadata_is_preserved(tmp_path: Path) -> None:
     result = copier.copy_file(src, dst)
 
     assert result.metadata_preserved is True
-    assert stat.S_IMODE(dst.stat().st_mode) == 0o640
+    if sys.platform != "win32":
+        # Windows 不支持 POSIX 权限位（chmod 仅影响只读标志）；mtime 断言跨平台保持
+        assert stat.S_IMODE(dst.stat().st_mode) == 0o640
     assert int(dst.stat().st_mtime) == 1_600_000_000
 
 
@@ -473,7 +476,11 @@ def test_metadata_preservation_can_be_disabled(tmp_path: Path) -> None:
     result = copier.copy_file(src, dst, preserve_metadata=False, warn=messages.append)
 
     assert result.metadata_preserved is False
-    assert messages == []
+    if hasattr(os, "posix_fallocate"):
+        assert messages == []
+    else:
+        # 无 posix_fallocate 的平台（如 Windows）每次复制会发一次预分配降级警告
+        assert messages and all("预分配" in m for m in messages)
 
 
 def test_metadata_failure_degrades_with_warning(
@@ -622,7 +629,10 @@ def test_copy_file_onto_nonexistent_but_equivalent_path(tmp_path: Path) -> None:
     data = make_data(2048)
     src = write_file(tmp_path / "f", data)
     dst = tmp_path / "ghost" / ".." / "f"
-    assert not dst.exists(), "前置条件：该写法指向的路径不存在（中间目录缺失）"
+    if sys.platform != "win32":
+        # POSIX 内核逐分量解析路径：中间目录 ghost 缺失时 stat 失败；
+        # Windows 先做词法归一化（ghost/.. 抵消），exists() 为 True。两种形态都必须被同源检测拦下。
+        assert not dst.exists(), "前置条件：该写法指向的路径不存在（中间目录缺失）"
 
     with pytest.raises(copier.SameFileError):
         copier.copy_file(src, dst)
@@ -679,10 +689,27 @@ def test_is_same_file_helper(tmp_path: Path) -> None:
     assert copier.is_same_file(src, tmp_path / "not-created-yet") is False
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="Windows 独有：大小写不敏感文件系统的 normcase 同源分支"
+)
+def test_samefile_rejects_case_variant_of_source(tmp_path: Path) -> None:
+    """同一文件仅大小写不同的路径写法（Windows 上指向同一文件）也必须被拒绝。"""
+    data = make_data(256)
+    src = write_file(tmp_path / "CaseFile.bin", data)
+    variant = Path(str(src).swapcase())
+
+    with pytest.raises(copier.SameFileError):
+        copier.copy_file(src, variant)
+
+    assert_file_untouched(src, data)
+
+
 def test_canonical_path_normalizes(tmp_path: Path) -> None:
     src = write_file(tmp_path / "f", b"x")
     assert copier.canonical_path(tmp_path / "ghost" / ".." / "f") == copier.canonical_path(src)
-    assert copier.canonical_path(src) == os.path.realpath(src)
+    # canonical = normcase(realpath(...))：Linux 上 normcase 为恒等；
+    # Windows 上额外规整盘符/大小写，保证大小写变体路径也判定为同一文件
+    assert copier.canonical_path(src) == os.path.normcase(os.path.realpath(src))
 
 
 def test_is_within_helper(tmp_path: Path) -> None:

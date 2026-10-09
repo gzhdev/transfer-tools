@@ -120,8 +120,25 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _make_stdio_failure_tolerant() -> None:
+    """让 stdio 在无法编码输出时降级为替换字符，而非抛 UnicodeEncodeError。
+
+    在非 UTF-8 区域设置的 Windows 上（如 en-US 环境的 cp1252 管道），
+    中文帮助/错误文本会触发编码异常导致退出码失真；保持本地编码、仅放宽
+    错误处理可兼顾中文 Windows 控制台（GBK 正常显示）与异编码管道。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(errors="replace")
+            except (ValueError, OSError):  # pragma: no cover - 防御性
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI 入口，返回退出码（``0``/``1``/``2``）。"""
+    _make_stdio_failure_tolerant()
     parser = build_parser()
     args = parser.parse_args(argv)
 
