@@ -26,10 +26,10 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: 安装依赖（.[gui] + pyinstaller + pytest）
+      - name: 安装依赖（.[gui] + pyinstaller + pytest + pyyaml）
         run: |
           python -m pip install --upgrade pip
-          python -m pip install ".[gui]" "pyinstaller>=6.0" pytest
+          python -m pip install ".[gui]" "pyinstaller>=6.0" pytest pyyaml
 
       - name: 运行测试套件（含 offscreen 界面测试）
         env:
